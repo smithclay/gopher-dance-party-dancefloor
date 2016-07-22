@@ -10,12 +10,14 @@ import (
 	"strings"
 
 	"github.com/garyburd/redigo/redis"
+	"github.com/newrelic/go-agent"
 )
 
 var (
 	redisAddress   = flag.String("redis-address", ":6379", "Address to the Redis server")
 	maxConnections = flag.Int("max-connections", 10, "Max connections to Redis")
 	httpPort       = flag.String("port", ":5001", "Port number to listen on")
+	licenseKey     = flag.String("license-key", "", "New Relic license key")
 )
 
 type Position struct {
@@ -25,6 +27,14 @@ type Position struct {
 
 func main() {
 	flag.Parse()
+
+	config := newrelic.NewConfig("dancefloor", *licenseKey)
+	config.BetaToken = "a55b5bede20cf527"
+	app, err := newrelic.NewApplication(config)
+	if err != nil {
+		log.Println("error creating new relic agent", err)
+		return
+	}
 
 	redisHash := "gophers" // redis hash name where data is persisted
 
@@ -40,7 +50,7 @@ func main() {
 
 	log.Println("Listening on port:", *httpPort)
 
-	http.HandleFunc("/add", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(newrelic.WrapHandleFunc(app, "/add", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		x := r.URL.Query().Get("x")
 		y := r.URL.Query().Get("y")
@@ -59,7 +69,7 @@ func main() {
 			return
 		}
 		fmt.Fprintf(w, "ok")
-	})
+	}))
 
 	http.HandleFunc("/del", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
