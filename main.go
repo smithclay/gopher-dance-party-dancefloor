@@ -33,7 +33,6 @@ func main() {
 	app, err := newrelic.NewApplication(config)
 	if err != nil {
 		log.Println("error creating new relic agent", err)
-		return
 	}
 
 	redisHash := "gophers" // redis hash name where data is persisted
