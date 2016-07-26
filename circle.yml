@@ -13,7 +13,7 @@ dependencies:
 
 test:
   override:
-    - docker run -d -p 9200:9200 smithclay/gopher-dance-party-dancefloor; sleep 10
+    - docker run -d -p 5001:5001 smithclay/gopher-dance-party-dancefloor; sleep 10
     - curl --retry 10 --retry-delay 5 -v http://localhost:5001
 
 deployment:
