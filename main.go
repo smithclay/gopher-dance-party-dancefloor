@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -25,12 +26,29 @@ type Position struct {
 	Y float64
 }
 
+func handleParamsError(w http.ResponseWriter) {
+	http.Error(w, "missing required params", http.StatusBadRequest)
+
+	if txn, ok := w.(newrelic.Transaction); ok {
+		txn.NoticeError(errors.New("missing required params"))
+	}
+}
+
+func handleRedisError(w http.ResponseWriter, err error) {
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+	if txn, ok := w.(newrelic.Transaction); ok {
+		txn.NoticeError(err)
+	}
+
+	log.Println("redis error", err)
+}
+
 func main() {
 	flag.Parse()
 
 	config := newrelic.NewConfig("dancefloor", *licenseKey)
-	config.BetaToken = "a55b5bede20cf527"
 	app, err := newrelic.NewApplication(config)
+
 	if err != nil {
 		log.Println("error creating new relic agent", err)
 	}
@@ -55,7 +73,7 @@ func main() {
 		y := r.URL.Query().Get("y")
 
 		if id == "" || x == "" || y == "" {
-			http.Error(w, "missing required params", http.StatusBadRequest)
+			handleParamsError(w)
 			return
 		}
 
@@ -63,18 +81,17 @@ func main() {
 		defer c.Close()
 		_, err := c.Do("HSETNX", redisHash, id, fmt.Sprintf("%s,%s", x, y))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			log.Println("HSET error", err)
+			handleRedisError(w, err)
 			return
 		}
 		fmt.Fprintf(w, "ok")
 	}))
 
-	http.HandleFunc("/del", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(newrelic.WrapHandleFunc(app, "/del", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 
 		if id == "" {
-			http.Error(w, "missing required params", http.StatusBadRequest)
+			handleParamsError(w)
 			return
 		}
 
@@ -82,22 +99,19 @@ func main() {
 		defer c.Close()
 		_, err := c.Do("HDEL", redisHash, id)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			log.Println("HDEL error", err)
+			handleRedisError(w, err)
 			return
 		}
 		fmt.Fprintf(w, "ok")
-	})
+	}))
 
-	http.HandleFunc("/move", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(newrelic.WrapHandleFunc(app, "/move", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		x := r.URL.Query().Get("x")
 		y := r.URL.Query().Get("y")
 
-		log.Println("move: ", r.URL.Query())
-
 		if id == "" || x == "" || y == "" {
-			http.Error(w, "missing required params", http.StatusBadRequest)
+			handleParamsError(w)
 			return
 		}
 
@@ -105,20 +119,18 @@ func main() {
 		defer c.Close()
 		_, err := c.Do("HSET", redisHash, id, fmt.Sprintf("%s,%s", x, y))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			log.Println("HSET error", err)
+			handleRedisError(w, err)
 			return
 		}
 		fmt.Fprintf(w, "ok")
-	})
+	}))
 
-	http.HandleFunc("/fetch", func(w http.ResponseWriter, r *http.Request) {
+	http.HandleFunc(newrelic.WrapHandleFunc(app, "/fetch", func(w http.ResponseWriter, r *http.Request) {
 		c := redisPool.Get()
 		defer c.Close()
 		values, err := redis.Values(c.Do("HGETALL", redisHash))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			log.Println("HGETALL error:", err)
+			handleRedisError(w, err)
 			return
 		}
 		returns := make(map[string]interface{})
@@ -134,11 +146,15 @@ func main() {
 		json, err := json.Marshal(returns)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
+			if txn, ok := w.(newrelic.Transaction); ok {
+				txn.NoticeError(err)
+			}
+
 			log.Println("json marshal error", err)
 			return
 		}
 		fmt.Fprintf(w, "%s", string(json))
-	})
+	}))
 
 	http.ListenAndServe(*httpPort, nil)
 }
