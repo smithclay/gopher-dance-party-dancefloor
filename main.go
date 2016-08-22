@@ -43,6 +43,25 @@ func handleRedisError(w http.ResponseWriter, err error) {
 	log.Println("redis error", err)
 }
 
+func performRedisOperation(w http.ResponseWriter, c redis.Conn, op string, args ...interface{}) (reply interface{}, err error) {
+	s := newrelic.DatastoreSegment{
+		Product:    newrelic.DatastoreRedis,
+		Collection: "gophers",
+		Operation:  op,
+	}
+
+	if txn, ok := w.(newrelic.Transaction); ok {
+		s.StartTime = newrelic.StartSegmentNow(txn)
+	}
+	reply, err = c.Do(op, args...)
+	s.End()
+	if err != nil {
+		handleRedisError(w, err)
+		return nil, err
+	}
+	return reply, nil
+}
+
 func main() {
 	flag.Parse()
 
@@ -79,11 +98,7 @@ func main() {
 
 		c := redisPool.Get()
 		defer c.Close()
-		_, err := c.Do("HSETNX", redisHash, id, fmt.Sprintf("%s,%s", x, y))
-		if err != nil {
-			handleRedisError(w, err)
-			return
-		}
+		performRedisOperation(w, c, "HSETNX", redisHash, id, fmt.Sprintf("%s,%s", x, y))
 		fmt.Fprintf(w, "ok")
 	}))
 
@@ -97,11 +112,7 @@ func main() {
 
 		c := redisPool.Get()
 		defer c.Close()
-		_, err := c.Do("HDEL", redisHash, id)
-		if err != nil {
-			handleRedisError(w, err)
-			return
-		}
+		performRedisOperation(w, c, "HDEL", redisHash, id)
 		fmt.Fprintf(w, "ok")
 	}))
 
@@ -117,20 +128,15 @@ func main() {
 
 		c := redisPool.Get()
 		defer c.Close()
-		_, err := c.Do("HSET", redisHash, id, fmt.Sprintf("%s,%s", x, y))
-		if err != nil {
-			handleRedisError(w, err)
-			return
-		}
+		performRedisOperation(w, c, "HSET", redisHash, id, fmt.Sprintf("%s, %s", x, y))
 		fmt.Fprintf(w, "ok")
 	}))
 
 	http.HandleFunc(newrelic.WrapHandleFunc(app, "/fetch", func(w http.ResponseWriter, r *http.Request) {
 		c := redisPool.Get()
 		defer c.Close()
-		values, err := redis.Values(c.Do("HGETALL", redisHash))
+		values, err := redis.Values(performRedisOperation(w, c, "HGETALL", redisHash))
 		if err != nil {
-			handleRedisError(w, err)
 			return
 		}
 		returns := make(map[string]interface{})
