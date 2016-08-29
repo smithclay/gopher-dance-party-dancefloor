@@ -44,14 +44,13 @@ func performRedisOperation(w http.ResponseWriter, p *redis.Pool, op string, args
 		Collection: "gophers",
 		Operation:  op,
 	}
+	defer s.End()
 
 	if txn, ok := w.(newrelic.Transaction); ok {
 		s.StartTime = newrelic.StartSegmentNow(txn)
 	}
 	reply, err = c.Do(op, args...)
-	s.End()
 	if err != nil {
-		handleRedisError(w, err)
 		return nil, err
 	}
 	return reply, nil
@@ -68,7 +67,7 @@ func main() {
 		log.Println("error creating new relic agent", err)
 	}
 
-	redisHash := "gophers" // redis hash name where data is persisted
+	redisHash := "gophers"
 
 	redisPool := redis.NewPool(func() (redis.Conn, error) {
 		c, err := redis.Dial("tcp", *redisAddress)
@@ -82,7 +81,7 @@ func main() {
 
 	log.Println("Listening on port:", *httpPort)
 
-	// error
+	// error endpoint
 	http.HandleFunc(newrelic.WrapHandleFunc(app, "/error", func(w http.ResponseWriter, r *http.Request) {
 		msg := r.URL.Query().Get("msg")
 		if msg == "" {
@@ -91,7 +90,7 @@ func main() {
 		http.Error(w, msg, http.StatusInternalServerError)
 	}))
 
-	// add
+	// add endpoint
 	http.HandleFunc(newrelic.WrapHandleFunc(app, "/add", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		x := r.URL.Query().Get("x")
@@ -105,10 +104,12 @@ func main() {
 		_, err := performRedisOperation(w, redisPool, "HSETNX", redisHash, id, fmt.Sprintf("%s,%s", x, y))
 		if err == nil {
 			fmt.Fprintf(w, "ok")
+		} else {
+			handleRedisError(w, err)
 		}
 	}))
 
-	// del
+	// del endpoint
 	http.HandleFunc(newrelic.WrapHandleFunc(app, "/del", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 
@@ -120,10 +121,12 @@ func main() {
 		_, err := performRedisOperation(w, redisPool, "HDEL", redisHash, id)
 		if err == nil {
 			fmt.Fprintf(w, "ok")
+		} else {
+			handleRedisError(w, err)
 		}
 	}))
 
-	// move
+	// move endpoint
 	http.HandleFunc(newrelic.WrapHandleFunc(app, "/move", func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("id")
 		x := r.URL.Query().Get("x")
@@ -137,13 +140,16 @@ func main() {
 		_, err := performRedisOperation(w, redisPool, "HSET", redisHash, id, fmt.Sprintf("%s, %s", x, y))
 		if err == nil {
 			fmt.Fprintf(w, "ok")
+		} else {
+			handleRedisError(w, err)
 		}
 	}))
 
-	// fetch
+	// fetch endpoint
 	http.HandleFunc(newrelic.WrapHandleFunc(app, "/fetch", func(w http.ResponseWriter, r *http.Request) {
 		values, err := redis.Values(performRedisOperation(w, redisPool, "HGETALL", redisHash))
 		if err != nil {
+			handleRedisError(w, err)
 			return
 		}
 		returns := make(map[string]interface{})
@@ -165,8 +171,9 @@ func main() {
 
 			log.Println("json marshal error", err)
 			return
+		} else {
+			fmt.Fprintf(w, "%s", string(json))
 		}
-		fmt.Fprintf(w, "%s", string(json))
 	}))
 
 	http.ListenAndServe(*httpPort, nil)
