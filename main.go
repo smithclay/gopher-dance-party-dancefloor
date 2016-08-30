@@ -44,12 +44,12 @@ func performRedisOperation(w http.ResponseWriter, p *redis.Pool, op string, args
 		Collection: "gophers",
 		Operation:  op,
 	}
-	defer s.End()
 
 	if txn, ok := w.(newrelic.Transaction); ok {
 		s.StartTime = newrelic.StartSegmentNow(txn)
 	}
 	reply, err = c.Do(op, args...)
+	s.End()
 	if err != nil {
 		return nil, err
 	}
